@@ -1,129 +1,124 @@
-//Include all the required Libraries
-#include <WiFi.h>
+#include <Arduino.h>
+
+// Scaffolding for Web Services
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 
-//Add your WiFi details
-const char* ssid = "NETGEAR35";
-const char* password = "chummypotato604";
+// Allow OTA software updates
+// #include <ElegantOTA.h>
 
-const char* PARAM_INPUT_1 = "output";
-const char* PARAM_INPUT_2 = "state";
+// Use local Wi-Fi
+#include <WiFi.h>
 
-// Create an AsyncWebServer object on port 80
+// Try and get a static IP address (so we can find the device for web pages)
+IPAddress local_IP(192, 168, 200, 103); // change 103 to be unique on your system
+IPAddress gateway(192, 168, 200, 1);
+IPAddress subnet(255, 255, 255, 0);
+
+// To get the local time we must include DNS servers. Google's used here.
+IPAddress primaryDNS(8, 8, 8, 8);
+IPAddress secondaryDNS(8, 8, 4, 4);
+
+// Forward declaration: convert Wi-Fi connection response to meaningful message
+const char *wl_status_to_string(wl_status_t status);
+
+// Standard web server, on port 80. Must be global. Obvs.
 AsyncWebServer server(80);
 
-// Definitions cause cpp
-String outputState(int output);
+// All Wi-Fi and server setup is done here
+void setup()
+{
+  // Assuming you want your ESP32 to act like any other client (STAtion) on your Wi-Fi
+  WiFi.mode(WIFI_STA);
 
+  // Store Wi-Fi configuration in EEPROM? Not a good idea as it will never forget these settings.
+  WiFi.persistent(false);
 
-const char index_html[] PROGMEM = R"rawliteral(
-<!DOCTYPE HTML><html>
-<head>
-  <title>Electronics Simplified</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="icon" href="data:,">
-  <style>
-    html {font-family: Arial; display: inline-block; text-align: center;}
-    h2 {font-size: 2.0rem;}
-    p {font-size: 3.0rem;}
-    body {max-width: 600px; margin:0px auto; padding-bottom: 25px;}
-    .switch {position: relative; display: inline-block; width: 120px; height: 68px} 
-    .switch input {display: none}
-    .slider {position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-color: #2d7fc7; border-radius: 6px}
-    .slider:before {position: absolute; content: ""; height: 52px; width: 52px; left: 8px; bottom: 8px; background-color: #fff; -webkit-transition: .4s; transition: .4s; border-radius: 3px}
-    input:checked+.slider {background-color: #b30000}
-    input:checked+.slider:before {-webkit-transform: translateX(52px); -ms-transform: translateX(52px); transform: translateX(52px)}
-  </style>
-</head>
-<body>
-  <h2>Electronics Simplified</h2>
-  <h2>ESP Async Web Server</h2>
-  %BUTTONPLACEHOLDER%
-<script>function toggleCheckbox(element) {
-  var xhr = new XMLHttpRequest();
-  if(element.checked){ xhr.open("GET", "/update?output="+element.id+"&state=1", true); }
-  else { xhr.open("GET", "/update?output="+element.id+"&state=0", true); }
-  xhr.send();
-}
-</script>
-</body>
-</html>
-)rawliteral";
+  // Reconnect if connection is lost
+  WiFi.setAutoReconnect(true);
 
-// Replaces placeholder with button section in your web page
-String processor(const String& var){
-  //Serial.println(var);
-  if(var == "BUTTONPLACEHOLDER"){
-    String buttons = "";
-    buttons += "<h4>Output - GPIO 12</h4><label class=\"switch\"><input type=\"checkbox\" onchange=\"toggleCheckbox(this)\" id=\"12\" " + outputState(12) + "><span class=\"slider\"></span></label>";
-    buttons += "<h4>Output - GPIO 13</h4><label class=\"switch\"><input type=\"checkbox\" onchange=\"toggleCheckbox(this)\" id=\"13\" " + outputState(13) + "><span class=\"slider\"></span></label>";
-    buttons += "<h4>Output - GPIO 14</h4><label class=\"switch\"><input type=\"checkbox\" onchange=\"toggleCheckbox(this)\" id=\"14\" " + outputState(14) + "><span class=\"slider\"></span></label>";
-    return buttons;
-  }
-  return String();
-}
+  // Modem sleep when in WIFI_STA mode not a good idea as someone might want to talk to it
+  WiFi.setSleep(false);
 
-String outputState(int output){
-  if(digitalRead(output)){
-    return "checked";
-  }
-  else {
-    return "";
-  }
-}
+  // Let's do it
+  WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS);
+  wl_status_t reply = WiFi.begin("NETGEAR35", "chummypotato604");
 
-void setup(){
-  // Serial port for debugging purposes
-  Serial.begin(115200);
+  // Log the result
+  log_w("Result: %s", wl_status_to_string(reply));
 
-  pinMode(12, OUTPUT);
-  digitalWrite(12, LOW);
-  pinMode(13, OUTPUT);
-  digitalWrite(13, LOW);
-  pinMode(14, OUTPUT);
-  digitalWrite(14, LOW);
-  
-  // Connect to Wi-Fi
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.println("Connecting to WiFi..");
-  }
+  // Now register some server pages
 
-  // Print ESP Local IP Address
-  Serial.println(WiFi.localIP());
+  // Just to be sure we have a 404 response on unknown requests
+  server.onNotFound(
+      [](AsyncWebServerRequest *request) {
+        // Send back a plain text message (can be made html if required)
+        request->send(404, "text/plain", "404 - Page Not Found, oops!");
+      });
 
-  // Route for root / web page
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send_P(200, "text/html", index_html, processor);
+  // Send back a web page (landing page)
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    // Tell the system that we will be sending back html (not just plain text)
+    AsyncResponseStream *response = request->beginResponseStream("text/html");
+
+    // Format the html as a RAW literal so we don't have to escape all the quotes (and more)
+    response->printf(R"(
+      <html>
+        <head>
+          <title>Landing Page</title>
+          <style>
+            body {
+              background-color: forestgreen;
+              font-family: Arial, Sans-Serif;
+            }
+          </style>
+        </head>
+        <body>
+          <h1>Landing Page</h1>
+          <p>
+            This is a descriptive paragraph for your landing page
+          </p>
+        </body>
+      </html>
+    )");
+
+    // Send back all the text/html for a standard web page
+    request->send(response);
   });
 
-  // Send a GET request to <ESP_IP>/update?output=<inputMessage1>&state=<inputMessage2>
-  server.on("/update", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    String inputMessage1;
-    String inputMessage2;
-    // GET input1 value on <ESP_IP>/update?output=<inputMessage1>&state=<inputMessage2>
-    if (request->hasParam(PARAM_INPUT_1) && request->hasParam(PARAM_INPUT_2)) {
-      inputMessage1 = request->getParam(PARAM_INPUT_1)->value();
-      inputMessage2 = request->getParam(PARAM_INPUT_2)->value();
-      digitalWrite(inputMessage1.toInt(), inputMessage2.toInt());
-    }
-    else {
-      inputMessage1 = "No message sent";
-      inputMessage2 = "No message sent";
-    }
-    Serial.print("GPIO: ");
-    Serial.print(inputMessage1);
-    Serial.print(" - Set to: ");
-    Serial.println(inputMessage2);
-    request->send(200, "text/plain", "OK");
-  });
-
-  // Start server
+  // Starting Async OTA web server AFTER all the server.on requests registered
+  // ElegantOTA.begin(&server);
   server.begin();
 }
 
-void loop() {
+void loop()
+{
+  // put your main code here, to run repeatedly:
+  // Nothing to do here (yet!)
+  yield();
+}
 
+// Translates the Wi-Fi connect response to English
+const char *wl_status_to_string(wl_status_t status)
+{
+  switch (status) {
+    case WL_NO_SHIELD:
+      return "WL_NO_SHIELD";
+    case WL_IDLE_STATUS:
+      return "WL_IDLE_STATUS";
+    case WL_NO_SSID_AVAIL:
+      return "WL_NO_SSID_AVAIL";
+    case WL_SCAN_COMPLETED:
+      return "WL_SCAN_COMPLETED";
+    case WL_CONNECTED:
+      return "WL_CONNECTED";
+    case WL_CONNECT_FAILED:
+      return "WL_CONNECT_FAILED";
+    case WL_CONNECTION_LOST:
+      return "WL_CONNECTION_LOST";
+    case WL_DISCONNECTED:
+      return "WL_DISCONNECTED";
+    default:
+      return "UNKNOWN";
+  }
 }
